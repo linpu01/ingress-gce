@@ -37,6 +37,7 @@ func TestHoldExternalIPv4(t *testing.T) {
 		service       *api_v1.Service
 		want          address.HoldResult
 		wantTearDown  bool
+		wantIpCol     string
 	}{
 		{
 			desc: "no address passed",
@@ -194,6 +195,25 @@ func TestHoldExternalIPv4(t *testing.T) {
 			},
 			wantTearDown: true,
 		},
+		{
+			desc: "with ip-collection annotation",
+			service: &api_v1.Service{
+				ObjectMeta: meta_v1.ObjectMeta{
+					Name:      name,
+					Namespace: namespace,
+					UID:       kubeSystemUID,
+					Annotations: map[string]string{
+						annotations.IPCollectionAnnotationKey: "my-ip-collection",
+					},
+				},
+			},
+			want: address.HoldResult{
+				IP:      notReservedIPv4,
+				Managed: address.IPAddrManaged,
+			},
+			wantTearDown: false,
+			wantIpCol:    "my-ip-collection",
+		},
 	}
 	for _, tC := range testCases {
 		tC := tC
@@ -221,6 +241,9 @@ func TestHoldExternalIPv4(t *testing.T) {
 			addr, err := cfg.Cloud.GetRegionAddressByIP(region, got.IP)
 			if err != nil || addr == nil {
 				t.Fatalf("unexpected err: %v", err)
+			}
+			if addr.IpCollection != tC.wantIpCol {
+				t.Errorf("address.IpCollection = %q, want %q", addr.IpCollection, tC.wantIpCol)
 			}
 
 			// Check if release cleans up address

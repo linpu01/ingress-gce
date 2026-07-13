@@ -99,6 +99,10 @@ func (l4 *L4) buildExpectedIPv6ForwardingRule(bsLink string, options gce.ILBOpti
 		}
 	}
 
+	if annotations.FromService(l4.Service).GetIPCollection() != "" {
+		subnetworkURL = ""
+	}
+
 	svcPorts := l4.Service.Spec.Ports
 	ports := utils.GetPorts(svcPorts)
 	protocol := string(utils.GetProtocol(svcPorts))
@@ -129,6 +133,7 @@ func (l4 *L4) buildExpectedIPv6ForwardingRule(bsLink string, options gce.ILBOpti
 		Subnetwork:          subnetworkURL,
 		AllowGlobalAccess:   options.AllowGlobalAccess,
 		NetworkTier:         cloud.NetworkTierPremium.ToGCEValue(),
+		IpCollection:        annotations.FromService(l4.Service).GetIPCollection(),
 	}
 
 	return fr, nil
@@ -204,6 +209,11 @@ func (l4netlb *L4NetLB) ensureIPv6ForwardingRule(bsLink string) (*composite.Forw
 	netTier, isFromAnnotation := annotations.NetworkTier(l4netlb.Service)
 	frLogger.V(2).Info("network tier for service", "networkTier", netTier, "isFromAnnotation", isFromAnnotation)
 
+	ipCollection := annotations.FromService(l4netlb.Service).GetIPCollection()
+	if ipCollection != "" {
+		subnetworkURL = ""
+	}
+
 	// IPv6 address is not supported for External Regional Network Load Balancing with Standard network tier.
 	if netTier == cloud.NetworkTierStandard {
 		resourceErr := "IPv6 External Load Balancer"
@@ -214,6 +224,7 @@ func (l4netlb *L4NetLB) ensureIPv6ForwardingRule(bsLink string) (*composite.Forw
 	if !l4netlb.cloud.IsLegacyNetwork() && netTier == cloud.NetworkTierPremium {
 		nm := types.NamespacedName{Namespace: l4netlb.Service.Namespace, Name: l4netlb.Service.Name}.String()
 		addrMgr := address.NewManager(l4netlb.cloud, nm, l4netlb.cloud.Region(), subnetworkURL, expectedIPv6FrName, ipv6AddressName, ipv6AddrToUse, cloud.SchemeExternal, netTier, address.IPv6Version, frLogger)
+		addrMgr.SetIPCollection(ipCollection)
 
 		// If network tier annotation in Service Spec is present
 		// check if it matches network tiers from forwarding rule and external ip Address.
@@ -346,6 +357,7 @@ func (l4netlb *L4NetLB) buildExpectedIPv6ForwardingRule(bsLink, ipv6AddressToUse
 		Subnetwork:          subnetworkURL,
 		AllPorts:            allPorts,
 		Ports:               ports,
+		IpCollection:        annotations.FromService(l4netlb.Service).GetIPCollection(),
 	}
 
 	return fr, nil

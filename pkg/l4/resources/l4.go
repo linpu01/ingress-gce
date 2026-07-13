@@ -424,6 +424,15 @@ func (l4 *L4) EnsureInternalLoadBalancer(nodeNames []string, svc *corev1.Service
 	}
 	l4.network = *svcNetwork
 
+	// Check conflicts between custom subnet and ip-collection
+	if annotations.FromService(svc).GetIPCollection() != "" && annotations.FromService(svc).GetInternalLoadBalancerAnnotationSubnet() != "" {
+		err := fmt.Errorf("cannot specify both custom subnet and ip-collection for LoadBalancer")
+		result.Error = l4utils.NewUserError(err)
+		result.MetricsLegacyState.IsUserError = true
+		result.MetricsState.Status = metrics.StatusUserError
+		return result
+	}
+
 	// If service requires IPv6 LoadBalancer -- verify that Subnet with Internal IPv6 ranges is used.
 	if l4.enableDualStack && l4utils.NeedsIPv6(l4.Service) {
 		err := l4.serviceSubnetHasInternalIPv6Range()

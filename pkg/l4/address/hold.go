@@ -72,6 +72,7 @@ func HoldExternalIPv4(cfg HoldConfig) (HoldResult, error) {
 		subnet, name, ipv4AddressName, res.IP,
 		cloud.SchemeExternal, netTier, IPv4Version, cfg.Logger,
 	)
+	addrMgr.SetIPCollection(annotations.FromService(cfg.Service).GetIPCollection())
 
 	// If network tier annotation in Service Spec is present
 	// check if it matches network tiers from forwarding rule and external ip Address.

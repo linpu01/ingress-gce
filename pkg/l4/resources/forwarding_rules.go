@@ -246,6 +246,7 @@ func (l4netlb *L4NetLB) ensureIPv4ForwardingRule(bsLink string) (*composite.Forw
 		LoadBalancingScheme: string(cloud.SchemeExternal),
 		BackendService:      bsLink,
 		NetworkTier:         netTier.ToGCEValue(),
+		IpCollection:        annotations.FromService(l4netlb.Service).GetIPCollection(),
 	}
 	if len(ports) <= maxForwardedPorts && flags.F.EnableDiscretePortForwarding {
 		newFwdRule.Ports = ports
