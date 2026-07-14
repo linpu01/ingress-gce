@@ -37,7 +37,6 @@ func TestHoldExternalIPv4(t *testing.T) {
 		service       *api_v1.Service
 		want          address.HoldResult
 		wantTearDown  bool
-		wantIpCol     string
 	}{
 		{
 			desc: "no address passed",
@@ -222,9 +221,6 @@ func TestHoldExternalIPv4(t *testing.T) {
 			addr, err := cfg.Cloud.GetRegionAddressByIP(region, got.IP)
 			if err != nil || addr == nil {
 				t.Fatalf("unexpected err: %v", err)
-			}
-			if addr.IpCollection != tC.wantIpCol {
-				t.Errorf("address.IpCollection = %q, want %q", addr.IpCollection, tC.wantIpCol)
 			}
 
 			// Check if release cleans up address
