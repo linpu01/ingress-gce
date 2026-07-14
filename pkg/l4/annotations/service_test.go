@@ -397,7 +397,7 @@ func TestGetIPCollection(t *testing.T) {
 			svc: &v1.Service{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						IPCollectionAnnotationKey: "my-ip-collection",
+						IPCollectionV6AnnotationKey: "my-ip-collection",
 					},
 				},
 			},
@@ -405,7 +405,7 @@ func TestGetIPCollection(t *testing.T) {
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			got := FromService(tc.svc).GetIPCollection()
+			got := FromService(tc.svc).GetIPCollectionV6()
 			if got != tc.want {
 				t.Errorf("FromService().GetIPCollection() = %q, want %q", got, tc.want)
 			}

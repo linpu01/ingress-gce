@@ -272,10 +272,10 @@ func (l4netlb *L4NetLB) EnsureFrontend(nodeNames []string, svc *corev1.Service, 
 	l4netlb.networkInfo = *networkInfo
 
 	// Check conflicts between custom subnet and ip-collection annotations.
-	if annotations.FromService(svc).GetIPCollection() != "" && annotations.FromService(svc).GetExternalLoadBalancerAnnotationSubnet() != "" {
+	if annotations.FromService(svc).GetIPCollectionV6() != "" && annotations.FromService(svc).GetExternalLoadBalancerAnnotationSubnet() != "" {
 		subnet := annotations.FromService(svc).GetExternalLoadBalancerAnnotationSubnet()
-		ipCollection := annotations.FromService(svc).GetIPCollection()
-		err := fmt.Errorf("cannot specify both networking.gke.io/load-balancer-subnet (%q) and networking.gke.io/ip-collection (%q) for LoadBalancer", subnet, ipCollection)
+		ipCollection := annotations.FromService(svc).GetIPCollectionV6()
+		err := fmt.Errorf("cannot specify both networking.gke.io/load-balancer-subnet (%q) and networking.gke.io/ip-collection-v6 (%q) for LoadBalancer", subnet, ipCollection)
 		result.Error = l4utils.NewUserError(err)
 		result.MetricsLegacyState.IsUserError = true
 		result.MetricsState.Status = metrics.StatusUserError
@@ -283,18 +283,18 @@ func (l4netlb *L4NetLB) EnsureFrontend(nodeNames []string, svc *corev1.Service, 
 	}
 
 	// Check conflicts between spec.loadBalancerIP and ip-collection
-	if annotations.FromService(svc).GetIPCollection() != "" && svc.Spec.LoadBalancerIP != "" {
-		ipCollection := annotations.FromService(svc).GetIPCollection()
-		err := fmt.Errorf("cannot specify both spec.LoadBalancerIP (%q) and networking.gke.io/ip-collection (%q) for LoadBalancer", svc.Spec.LoadBalancerIP, ipCollection)
+	if annotations.FromService(svc).GetIPCollectionV6() != "" && svc.Spec.LoadBalancerIP != "" {
+		ipCollection := annotations.FromService(svc).GetIPCollectionV6()
+		err := fmt.Errorf("cannot specify both spec.LoadBalancerIP (%q) and networking.gke.io/ip-collection-v6 (%q) for LoadBalancer", svc.Spec.LoadBalancerIP, ipCollection)
 		result.Error = l4utils.NewUserError(err)
 		result.MetricsLegacyState.IsUserError = true
 		result.MetricsState.Status = metrics.StatusUserError
 		return result
 	}
 
-	// Check if ip-collection is specified for an IPv4-only service
-	if annotations.FromService(svc).GetIPCollection() != "" && !l4utils.NeedsIPv6(svc) {
-		err := fmt.Errorf("networking.gke.io/ip-collection is currently only supported for IPv6 Services")
+	// Check if ip-collection-v6 is specified for an IPv4 service
+	if annotations.FromService(svc).GetIPCollectionV6() != "" && l4utils.NeedsIPv4(svc) {
+		err := fmt.Errorf("networking.gke.io/ip-collection-v6 is currently only supported for IPv6-only Services")
 		result.Error = l4utils.NewUserError(err)
 		result.MetricsLegacyState.IsUserError = true
 		result.MetricsState.Status = metrics.StatusUserError

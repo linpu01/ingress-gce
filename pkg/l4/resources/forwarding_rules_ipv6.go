@@ -99,7 +99,7 @@ func (l4 *L4) buildExpectedIPv6ForwardingRule(bsLink string, options gce.ILBOpti
 		}
 	}
 
-	if annotations.FromService(l4.Service).GetIPCollection() != "" {
+	if annotations.FromService(l4.Service).GetIPCollectionV6() != "" {
 		subnetworkURL = ""
 	}
 
@@ -133,7 +133,7 @@ func (l4 *L4) buildExpectedIPv6ForwardingRule(bsLink string, options gce.ILBOpti
 		Subnetwork:          subnetworkURL,
 		AllowGlobalAccess:   options.AllowGlobalAccess,
 		NetworkTier:         cloud.NetworkTierPremium.ToGCEValue(),
-		IpCollection:        annotations.FromService(l4.Service).GetIPCollection(),
+		IpCollection:        annotations.FromService(l4.Service).GetIPCollectionV6(),
 	}
 
 	return fr, nil
@@ -196,7 +196,7 @@ func (l4netlb *L4NetLB) ensureIPv6ForwardingRule(bsLink string) (*composite.Forw
 		return nil, l4utils.ResourceResync, fmt.Errorf("error getting ipv6 forwarding rule subnet: %w", err)
 	}
 
-	ipCollection := annotations.FromService(l4netlb.Service).GetIPCollection()
+	ipCollection := annotations.FromService(l4netlb.Service).GetIPCollectionV6()
 	if ipCollection != "" {
 		subnetworkURL = ""
 	}
@@ -357,7 +357,7 @@ func (l4netlb *L4NetLB) buildExpectedIPv6ForwardingRule(bsLink, ipv6AddressToUse
 		Subnetwork:          subnetworkURL,
 		AllPorts:            allPorts,
 		Ports:               ports,
-		IpCollection:        annotations.FromService(l4netlb.Service).GetIPCollection(),
+		IpCollection:        annotations.FromService(l4netlb.Service).GetIPCollectionV6(),
 	}
 
 	return fr, nil

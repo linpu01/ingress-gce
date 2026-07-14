@@ -111,8 +111,8 @@ const (
 	// CustomForwardingRuleKey is the annotation key for custom forwarding rule name.
 	CustomForwardingRuleKey = "networking.gke.io/custom-forwarding-rule"
 
-	// IPCollectionAnnotationKey is the annotation key for BYOIP IP collection.
-	IPCollectionAnnotationKey = "networking.gke.io/ip-collection"
+	// IPCollectionV6AnnotationKey is the annotation key for BYOIP IPv6 IP collection.
+	IPCollectionV6AnnotationKey = "networking.gke.io/ip-collection-v6"
 )
 
 // Service represents Service annotations.
@@ -128,9 +128,9 @@ func FromService(obj *v1.Service) *Service {
 	return &Service{obj.Annotations}
 }
 
-// GetIPCollection returns the configured IP collection for BYOIP.
-func (svc *Service) GetIPCollection() string {
-	if val, exists := svc.v[IPCollectionAnnotationKey]; exists {
+// GetIPCollectionV6 returns the configured IP collection for BYOIP.
+func (svc *Service) GetIPCollectionV6() string {
+	if val, exists := svc.v[IPCollectionV6AnnotationKey]; exists {
 		return val
 	}
 	return ""

@@ -1655,7 +1655,7 @@ func assertDualStackNetLBResources(t *testing.T, l4NetLB *L4NetLB, nodeNames []s
 func assertDualStackNetLBResourcesWithCustomIPv6Subnet(t *testing.T, l4NetLB *L4NetLB, nodeNames []string, expectedIPv6Subnet string) {
 	t.Helper()
 
-	if annotations.FromService(l4NetLB.Service).GetIPCollection() != "" {
+	if annotations.FromService(l4NetLB.Service).GetIPCollectionV6() != "" {
 		expectedIPv6Subnet = ""
 	}
 
@@ -1749,7 +1749,7 @@ func assertNetLBResourcesIPv6Only(t *testing.T, l4NetLB *L4NetLB, nodeNames []st
 	}
 
 	expectedIPv6Subnet := l4NetLB.cloud.SubnetworkURL()
-	if annotations.FromService(l4NetLB.Service).GetIPCollection() != "" {
+	if annotations.FromService(l4NetLB.Service).GetIPCollectionV6() != "" {
 		expectedIPv6Subnet = ""
 	}
 	if err := verifyNetLBIPv6ForwardingRule(l4NetLB, backendService.SelfLink, expectedIPv6Subnet); err != nil {
@@ -2017,8 +2017,8 @@ func buildExpectedNetLBAnnotations(l4netlb *L4NetLB) map[string]string {
 	if val, ok := l4netlb.Service.Annotations[annotations.RBSAnnotationKey]; ok {
 		expectedAnnotations[annotations.RBSAnnotationKey] = val
 	}
-	if val, ok := l4netlb.Service.Annotations[annotations.IPCollectionAnnotationKey]; ok {
-		expectedAnnotations[annotations.IPCollectionAnnotationKey] = val
+	if val, ok := l4netlb.Service.Annotations[annotations.IPCollectionV6AnnotationKey]; ok {
+		expectedAnnotations[annotations.IPCollectionV6AnnotationKey] = val
 	}
 	return expectedAnnotations
 }
@@ -2246,47 +2246,6 @@ func TestEnsureL4NetLB_L4LBConfigLogging(t *testing.T) {
 	}
 }
 
-func TestDualStackNetLBIPCollectionAnnotation(t *testing.T) {
-	t.Parallel()
-	nodeNames := []string{"test-node-1"}
-
-	svc := test.NewL4NetLBRBSService(8080)
-	l4NetLB := mustSetupNetLBTestHandler(t, svc, nodeNames)
-
-	svc.Annotations[annotations.IPCollectionAnnotationKey] = "my-collection"
-	svc.Spec.IPFamilies = []v1.IPFamily{v1.IPv4Protocol, v1.IPv6Protocol}
-
-	result := l4NetLB.EnsureFrontend(nodeNames, svc, time.Now())
-	if result.Error != nil {
-		t.Fatalf("Failed to ensure loadBalancer, err %v", result.Error)
-	}
-	svc.Annotations = result.Annotations
-	assertDualStackNetLBResourcesWithCustomIPv6Subnet(t, l4NetLB, nodeNames, "")
-
-	// Check IpCollection and Subnetwork on IPv6 Forwarding Rule
-	frName := l4NetLB.ipv6FRName()
-	fwdRule, err := composite.GetForwardingRule(l4NetLB.cloud, meta.RegionalKey(frName, l4NetLB.cloud.Region()), meta.VersionGA, klog.TODO())
-	if err != nil {
-		t.Fatalf("failed to fetch forwarding rule %s - err %v", frName, err)
-	}
-	if fwdRule.IpCollection != "my-collection" {
-		t.Errorf("fwdRule.IpCollection = %v, want my-collection", fwdRule.IpCollection)
-	}
-	if fwdRule.Subnetwork != "" {
-		t.Errorf("fwdRule.Subnetwork = %v, want empty string", fwdRule.Subnetwork)
-	}
-
-	// Check IpCollection on IPv4 Forwarding Rule
-	ipv4FrName := l4NetLB.frName()
-	fwdRuleV4, err := composite.GetForwardingRule(l4NetLB.cloud, meta.RegionalKey(ipv4FrName, l4NetLB.cloud.Region()), meta.VersionGA, klog.TODO())
-	if err != nil {
-		t.Fatalf("failed to fetch forwarding rule %s - err %v", ipv4FrName, err)
-	}
-	if fwdRuleV4.IpCollection != "my-collection" {
-		t.Errorf("fwdRuleV4.IpCollection = %v, want my-collection", fwdRuleV4.IpCollection)
-	}
-}
-
 func TestIPv6OnlyNetLBIPCollectionAnnotation(t *testing.T) {
 	t.Parallel()
 	nodeNames := []string{"test-node-1"}
@@ -2294,7 +2253,7 @@ func TestIPv6OnlyNetLBIPCollectionAnnotation(t *testing.T) {
 	svc := test.NewL4NetLBRBSService(8080)
 	l4NetLB := mustSetupNetLBTestHandler(t, svc, nodeNames)
 
-	svc.Annotations[annotations.IPCollectionAnnotationKey] = "my-collection"
+	svc.Annotations[annotations.IPCollectionV6AnnotationKey] = "my-collection"
 	svc.Spec.IPFamilies = []v1.IPFamily{v1.IPv6Protocol}
 
 	result := l4NetLB.EnsureFrontend(nodeNames, svc, time.Now())
@@ -2333,7 +2292,7 @@ func TestEnsureFrontendConflictingAnnotations(t *testing.T) {
 	if svc.Annotations == nil {
 		svc.Annotations = make(map[string]string)
 	}
-	svc.Annotations[annotations.IPCollectionAnnotationKey] = "my-collection"
+	svc.Annotations[annotations.IPCollectionV6AnnotationKey] = "my-collection"
 	svc.Annotations[annotations.CustomSubnetAnnotationKey] = "my-subnet"
 
 	namer := namer_util.NewL4Namer(kubeSystemUID, namer_util.NewNamer(vals.ClusterName, "cluster-fw", klog.TODO()))
@@ -2355,7 +2314,7 @@ func TestEnsureFrontendConflictingAnnotations(t *testing.T) {
 	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
 	if result.Error == nil {
 		t.Errorf("Expected an error for conflicting annotations, but got nil")
-	} else if !strings.Contains(result.Error.Error(), "cannot specify both networking.gke.io/load-balancer-subnet (\"my-subnet\") and networking.gke.io/ip-collection (\"my-collection\") for LoadBalancer") {
+	} else if !strings.Contains(result.Error.Error(), "cannot specify both networking.gke.io/load-balancer-subnet (\"my-subnet\") and networking.gke.io/ip-collection-v6 (\"my-collection\") for LoadBalancer") {
 		t.Errorf("Expected conflict error, got %v", result.Error)
 	}
 	if result.MetricsState.Status != metrics.StatusUserError {
@@ -2373,7 +2332,7 @@ func TestEnsureFrontendConflictingIPAnnotations(t *testing.T) {
 	if svc.Annotations == nil {
 		svc.Annotations = make(map[string]string)
 	}
-	svc.Annotations[annotations.IPCollectionAnnotationKey] = "my-collection"
+	svc.Annotations[annotations.IPCollectionV6AnnotationKey] = "my-collection"
 	svc.Spec.LoadBalancerIP = "1.2.3.4"
 
 	namer := namer_util.NewL4Namer(kubeSystemUID, namer_util.NewNamer(vals.ClusterName, "cluster-fw", klog.TODO()))
@@ -2395,7 +2354,7 @@ func TestEnsureFrontendConflictingIPAnnotations(t *testing.T) {
 	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
 	if result.Error == nil {
 		t.Errorf("Expected an error for conflicting annotations, but got nil")
-	} else if !strings.Contains(result.Error.Error(), "cannot specify both spec.LoadBalancerIP (\"1.2.3.4\") and networking.gke.io/ip-collection (\"my-collection\") for LoadBalancer") {
+	} else if !strings.Contains(result.Error.Error(), "cannot specify both spec.LoadBalancerIP (\"1.2.3.4\") and networking.gke.io/ip-collection-v6 (\"my-collection\") for LoadBalancer") {
 		t.Errorf("Expected conflict error, got %v", result.Error)
 	}
 	if result.MetricsState.Status != metrics.StatusUserError {
@@ -2411,7 +2370,7 @@ func TestEnsureFrontendIPv4OnlyIPCollectionError(t *testing.T) {
 	if svc.Annotations == nil {
 		svc.Annotations = make(map[string]string)
 	}
-	svc.Annotations[annotations.IPCollectionAnnotationKey] = "my-collection"
+	svc.Annotations[annotations.IPCollectionV6AnnotationKey] = "my-collection"
 	svc.Spec.IPFamilies = []v1.IPFamily{v1.IPv4Protocol}
 
 	namer := namer_util.NewL4Namer(kubeSystemUID, namer_util.NewNamer(vals.ClusterName, "cluster-fw", klog.TODO()))
@@ -2433,8 +2392,49 @@ func TestEnsureFrontendIPv4OnlyIPCollectionError(t *testing.T) {
 	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
 	if result.Error == nil {
 		t.Errorf("Expected an error for ip-collection on IPv4 service, but got nil")
-	} else if !strings.Contains(result.Error.Error(), "networking.gke.io/ip-collection is currently only supported for IPv6 Services") {
-		t.Errorf("Expected IPv4 error, got %v", result.Error)
+	} else if !strings.Contains(result.Error.Error(), "networking.gke.io/ip-collection-v6 is currently only supported for IPv6-only Services") {
+		t.Errorf("Expected IPv6-only error, got %v", result.Error)
+	}
+	if result.MetricsState.Status != metrics.StatusUserError {
+		t.Errorf("Expected StatusUserError, got %v", result.MetricsState.Status)
+	}
+	if result.MetricsLegacyState.IsUserError != true {
+		t.Errorf("Expected IsUserError to be true")
+	}
+}
+
+func TestEnsureFrontendDualStackIPCollectionError(t *testing.T) {
+	nodeNames := []string{"node-1"}
+	vals := gce.DefaultTestClusterValues()
+	fakeGCE := getFakeGCECloud(vals)
+	svc := test.NewL4NetLBRBSService(8080)
+	if svc.Annotations == nil {
+		svc.Annotations = make(map[string]string)
+	}
+	svc.Annotations[annotations.IPCollectionV6AnnotationKey] = "my-collection"
+	svc.Spec.IPFamilies = []v1.IPFamily{v1.IPv4Protocol, v1.IPv6Protocol}
+
+	namer := namer_util.NewL4Namer(kubeSystemUID, namer_util.NewNamer(vals.ClusterName, "cluster-fw", klog.TODO()))
+
+	l4NetLBParams := &L4NetLBParams{
+		Service:         svc,
+		Cloud:           fakeGCE,
+		Namer:           namer,
+		Recorder:        record.NewFakeRecorder(100),
+		NetworkResolver: network.NewFakeResolver(network.DefaultNetwork(fakeGCE)),
+	}
+	l4netlb := NewL4NetLB(l4NetLBParams, klog.TODO())
+	l4netlb.healthChecks = healthchecks.Fake(fakeGCE, l4netlb.recorder)
+
+	if _, err := test.CreateAndInsertNodes(l4netlb.cloud, nodeNames, vals.ZoneName); err != nil {
+		t.Errorf("Unexpected error when adding nodes %v", err)
+	}
+
+	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
+	if result.Error == nil {
+		t.Errorf("Expected an error for ip-collection on dualstack service, but got nil")
+	} else if !strings.Contains(result.Error.Error(), "networking.gke.io/ip-collection-v6 is currently only supported for IPv6-only Services") {
+		t.Errorf("Expected IPv6-only error, got %v", result.Error)
 	}
 	if result.MetricsState.Status != metrics.StatusUserError {
 		t.Errorf("Expected StatusUserError, got %v", result.MetricsState.Status)

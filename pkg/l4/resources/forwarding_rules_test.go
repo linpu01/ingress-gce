@@ -199,7 +199,7 @@ func TestL4CreateExternalForwardingRule(t *testing.T) {
 		{
 			desc: "create with ip-collection",
 			svc: &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: serviceNamespace, UID: types.UID("1"), Annotations: map[string]string{annotations.IPCollectionAnnotationKey: "my-ip-collection"}},
+				ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: serviceNamespace, UID: types.UID("1"), Annotations: map[string]string{annotations.IPCollectionV6AnnotationKey: "my-ip-collection"}},
 				Spec: corev1.ServiceSpec{
 					Ports: []corev1.ServicePort{
 						{
