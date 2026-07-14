@@ -292,6 +292,15 @@ func (l4netlb *L4NetLB) EnsureFrontend(nodeNames []string, svc *corev1.Service, 
 		return result
 	}
 
+	// Check if ip-collection is specified for an IPv4-only service
+	if annotations.FromService(svc).GetIPCollection() != "" && !l4utils.NeedsIPv6(svc) {
+		err := fmt.Errorf("networking.gke.io/ip-collection is currently only supported for IPv6 Services")
+		result.Error = l4utils.NewUserError(err)
+		result.MetricsLegacyState.IsUserError = true
+		result.MetricsState.Status = metrics.StatusUserError
+		return result
+	}
+
 	// if service requires strong session affinity, check requirements
 	if err := l4netlb.checkStrongSessionAffinityRequirements(); err != nil {
 		result.Error = err

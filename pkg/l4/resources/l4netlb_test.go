@@ -2355,7 +2355,7 @@ func TestEnsureFrontendConflictingAnnotations(t *testing.T) {
 	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
 	if result.Error == nil {
 		t.Errorf("Expected an error for conflicting annotations, but got nil")
-	} else if !strings.Contains(result.Error.Error(), "cannot specify both custom subnet and ip-collection") {
+	} else if !strings.Contains(result.Error.Error(), "cannot specify both networking.gke.io/load-balancer-subnet (\"my-subnet\") and networking.gke.io/ip-collection (\"my-collection\") for LoadBalancer") {
 		t.Errorf("Expected conflict error, got %v", result.Error)
 	}
 	if result.MetricsState.Status != metrics.StatusUserError {
@@ -2400,5 +2400,46 @@ func TestEnsureFrontendConflictingIPAnnotations(t *testing.T) {
 	}
 	if result.MetricsState.Status != metrics.StatusUserError {
 		t.Errorf("Expected UserError status, got %v", result.MetricsState.Status)
+	}
+}
+
+func TestEnsureFrontendIPv4OnlyIPCollectionError(t *testing.T) {
+	nodeNames := []string{"node-1"}
+	vals := gce.DefaultTestClusterValues()
+	fakeGCE := getFakeGCECloud(vals)
+	svc := test.NewL4NetLBRBSService(8080)
+	if svc.Annotations == nil {
+		svc.Annotations = make(map[string]string)
+	}
+	svc.Annotations[annotations.IPCollectionAnnotationKey] = "my-collection"
+	svc.Spec.IPFamilies = []v1.IPFamily{v1.IPv4Protocol}
+
+	namer := namer_util.NewL4Namer(kubeSystemUID, namer_util.NewNamer(vals.ClusterName, "cluster-fw", klog.TODO()))
+
+	l4NetLBParams := &L4NetLBParams{
+		Service:         svc,
+		Cloud:           fakeGCE,
+		Namer:           namer,
+		Recorder:        record.NewFakeRecorder(100),
+		NetworkResolver: network.NewFakeResolver(network.DefaultNetwork(fakeGCE)),
+	}
+	l4netlb := NewL4NetLB(l4NetLBParams, klog.TODO())
+	l4netlb.healthChecks = healthchecks.Fake(fakeGCE, l4netlb.recorder)
+
+	if _, err := test.CreateAndInsertNodes(l4netlb.cloud, nodeNames, vals.ZoneName); err != nil {
+		t.Errorf("Unexpected error when adding nodes %v", err)
+	}
+
+	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
+	if result.Error == nil {
+		t.Errorf("Expected an error for ip-collection on IPv4 service, but got nil")
+	} else if !strings.Contains(result.Error.Error(), "networking.gke.io/ip-collection is currently only supported for IPv6 Services") {
+		t.Errorf("Expected IPv4 error, got %v", result.Error)
+	}
+	if result.MetricsState.Status != metrics.StatusUserError {
+		t.Errorf("Expected StatusUserError, got %v", result.MetricsState.Status)
+	}
+	if result.MetricsLegacyState.IsUserError != true {
+		t.Errorf("Expected IsUserError to be true")
 	}
 }

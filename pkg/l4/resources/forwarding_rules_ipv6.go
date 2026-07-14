@@ -195,6 +195,11 @@ func (l4netlb *L4NetLB) ensureIPv6ForwardingRule(bsLink string) (*composite.Forw
 	if err != nil {
 		return nil, l4utils.ResourceResync, fmt.Errorf("error getting ipv6 forwarding rule subnet: %w", err)
 	}
+
+	ipCollection := annotations.FromService(l4netlb.Service).GetIPCollection()
+	if ipCollection != "" {
+		subnetworkURL = ""
+	}
 	frLogger.V(2).Info("subnetworkURL for service", "subnetworkURL", subnetworkURL)
 
 	// Determine IP which will be used for this LB. If no forwarding rule has been established
@@ -208,11 +213,6 @@ func (l4netlb *L4NetLB) ensureIPv6ForwardingRule(bsLink string) (*composite.Forw
 
 	netTier, isFromAnnotation := annotations.NetworkTier(l4netlb.Service)
 	frLogger.V(2).Info("network tier for service", "networkTier", netTier, "isFromAnnotation", isFromAnnotation)
-
-	ipCollection := annotations.FromService(l4netlb.Service).GetIPCollection()
-	if ipCollection != "" {
-		subnetworkURL = ""
-	}
 
 	// IPv6 address is not supported for External Regional Network Load Balancing with Standard network tier.
 	if netTier == cloud.NetworkTierStandard {

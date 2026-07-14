@@ -445,6 +445,15 @@ func (l4 *L4) EnsureInternalLoadBalancer(nodeNames []string, svc *corev1.Service
 		return result
 	}
 
+	// Check if ip-collection is specified for an IPv4-only service
+	if annotations.FromService(svc).GetIPCollection() != "" && !l4utils.NeedsIPv6(svc) {
+		err := fmt.Errorf("networking.gke.io/ip-collection is currently only supported for IPv6 Services")
+		result.Error = l4utils.NewUserError(err)
+		result.MetricsLegacyState.IsUserError = true
+		result.MetricsState.Status = metrics.StatusUserError
+		return result
+	}
+
 	// If service requires IPv6 LoadBalancer -- verify that Subnet with Internal IPv6 ranges is used.
 	if l4.enableDualStack && l4utils.NeedsIPv6(l4.Service) {
 		err := l4.serviceSubnetHasInternalIPv6Range()
@@ -515,7 +524,14 @@ func (l4 *L4) EnsureInternalLoadBalancer(nodeNames []string, svc *corev1.Service
 	var ipv6AddressName string
 	if l4.enableDualStack && l4utils.NeedsIPv6(l4.Service) {
 		existingIPv6FR, err = l4.getOldIPv6ForwardingRule(existingBS)
-		ipv6AddrToUse, ipv6AddressName, err = address.IPv6ToUse(l4.cloud, l4.Service, existingIPv6FR, subnetworkURL, l4.svcLogger)
+
+		ipv6SubnetworkURL := subnetworkURL
+		ipCollection := annotations.FromService(l4.Service).GetIPCollection()
+		if ipCollection != "" {
+			ipv6SubnetworkURL = ""
+		}
+
+		ipv6AddrToUse, ipv6AddressName, err = address.IPv6ToUse(l4.cloud, l4.Service, existingIPv6FR, ipv6SubnetworkURL, l4.svcLogger)
 		if err != nil {
 			result.Error = fmt.Errorf("EnsureInternalLoadBalancer error: address.IPv6ToUse returned error: %w", err)
 			return result
@@ -526,7 +542,8 @@ func (l4 *L4) EnsureInternalLoadBalancer(nodeNames []string, svc *corev1.Service
 		if !l4.cloud.IsLegacyNetwork() {
 			nm := types.NamespacedName{Namespace: l4.Service.Namespace, Name: l4.Service.Name}.String()
 			// ILB can be created only in Premium Tier
-			ipv6AddrMgr := address.NewManager(l4.cloud, nm, l4.cloud.Region(), subnetworkURL, l4.getIPv6FRName(), ipv6AddressName, ipv6AddrToUse, cloud.SchemeInternal, cloud.NetworkTierPremium, address.IPv6Version, l4.svcLogger)
+			ipv6AddrMgr := address.NewManager(l4.cloud, nm, l4.cloud.Region(), ipv6SubnetworkURL, l4.getIPv6FRName(), ipv6AddressName, ipv6AddrToUse, cloud.SchemeInternal, cloud.NetworkTierPremium, address.IPv6Version, l4.svcLogger)
+			ipv6AddrMgr.SetIPCollection(ipCollection)
 			ipv6AddrToUse, _, err = ipv6AddrMgr.HoldAddress()
 			if err != nil {
 				result.Error = fmt.Errorf("EnsureInternalLoadBalancer error: ipv6AddrMgr.HoldAddress() returned error %w", err)

@@ -195,25 +195,6 @@ func TestHoldExternalIPv4(t *testing.T) {
 			},
 			wantTearDown: true,
 		},
-		{
-			desc: "with ip-collection annotation",
-			service: &api_v1.Service{
-				ObjectMeta: meta_v1.ObjectMeta{
-					Name:      name,
-					Namespace: namespace,
-					UID:       kubeSystemUID,
-					Annotations: map[string]string{
-						annotations.IPCollectionAnnotationKey: "my-ip-collection",
-					},
-				},
-			},
-			want: address.HoldResult{
-				IP:      notReservedIPv4,
-				Managed: address.IPAddrManaged,
-			},
-			wantTearDown: false,
-			wantIpCol:    "my-ip-collection",
-		},
 	}
 	for _, tC := range testCases {
 		tC := tC
