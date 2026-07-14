@@ -3479,3 +3479,42 @@ func TestEnsureInternalLoadBalancerConflictingAnnotations(t *testing.T) {
 		t.Errorf("Expected UserError status, got %v", result.MetricsState.Status)
 	}
 }
+
+func TestEnsureInternalLoadBalancerConflictingIPAnnotations(t *testing.T) {
+	t.Parallel()
+	nodeNames := []string{"test-node-1"}
+	vals := gce.DefaultTestClusterValues()
+	fakeGCE := getFakeGCECloud(vals)
+
+	svc := test.NewL4ILBService(false, 8080)
+	if svc.Annotations == nil {
+		svc.Annotations = make(map[string]string)
+	}
+	svc.Annotations[annotations.IPCollectionAnnotationKey] = "my-collection"
+	svc.Spec.LoadBalancerIP = "1.2.3.4"
+
+	namer := namer_util.NewL4Namer(kubeSystemUID, namer_util.NewNamer(vals.ClusterName, "cluster-fw", klog.TODO()))
+
+	l4Params := &L4ILBParams{
+		Service:         svc,
+		Cloud:           fakeGCE,
+		Namer:           namer,
+		Recorder:        record.NewFakeRecorder(100),
+		NetworkResolver: network.NewFakeResolver(network.DefaultNetwork(fakeGCE)),
+	}
+	l4 := NewL4Handler(l4Params, klog.TODO())
+
+	if _, err := test.CreateAndInsertNodes(l4.cloud, nodeNames, vals.ZoneName); err != nil {
+		t.Errorf("Unexpected error when adding nodes %v", err)
+	}
+
+	result := l4.EnsureInternalLoadBalancer(nodeNames, svc)
+	if result.Error == nil {
+		t.Errorf("Expected an error for conflicting annotations, but got nil")
+	} else if !strings.Contains(result.Error.Error(), "cannot specify both spec.LoadBalancerIP and ip-collection") {
+		t.Errorf("Expected conflict error, got %v", result.Error)
+	}
+	if result.MetricsState.Status != metrics.StatusUserError {
+		t.Errorf("Expected UserError status, got %v", result.MetricsState.Status)
+	}
+}

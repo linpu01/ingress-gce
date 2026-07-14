@@ -280,6 +280,15 @@ func (l4netlb *L4NetLB) EnsureFrontend(nodeNames []string, svc *corev1.Service, 
 		return result
 	}
 
+	// Check conflicts between spec.loadBalancerIP and ip-collection
+	if annotations.FromService(svc).GetIPCollection() != "" && svc.Spec.LoadBalancerIP != "" {
+		err := fmt.Errorf("cannot specify both spec.LoadBalancerIP and ip-collection for LoadBalancer")
+		result.Error = l4utils.NewUserError(err)
+		result.MetricsLegacyState.IsUserError = true
+		result.MetricsState.Status = metrics.StatusUserError
+		return result
+	}
+
 	// if service requires strong session affinity, check requirements
 	if err := l4netlb.checkStrongSessionAffinityRequirements(); err != nil {
 		result.Error = err
