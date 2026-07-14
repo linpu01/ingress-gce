@@ -273,7 +273,9 @@ func (l4netlb *L4NetLB) EnsureFrontend(nodeNames []string, svc *corev1.Service, 
 
 	// Check conflicts between custom subnet and ip-collection annotations.
 	if annotations.FromService(svc).GetIPCollection() != "" && annotations.FromService(svc).GetExternalLoadBalancerAnnotationSubnet() != "" {
-		err := fmt.Errorf("cannot specify both networking.gke.io/load-balancer-subnet and networking.gke.io/ip-collection for LoadBalancer")
+		subnet := annotations.FromService(svc).GetExternalLoadBalancerAnnotationSubnet()
+		ipCollection := annotations.FromService(svc).GetIPCollection()
+		err := fmt.Errorf("cannot specify both networking.gke.io/load-balancer-subnet (%q) and networking.gke.io/ip-collection (%q) for LoadBalancer", subnet, ipCollection)
 		result.Error = l4utils.NewUserError(err)
 		result.MetricsLegacyState.IsUserError = true
 		result.MetricsState.Status = metrics.StatusUserError
@@ -282,7 +284,8 @@ func (l4netlb *L4NetLB) EnsureFrontend(nodeNames []string, svc *corev1.Service, 
 
 	// Check conflicts between spec.loadBalancerIP and ip-collection
 	if annotations.FromService(svc).GetIPCollection() != "" && svc.Spec.LoadBalancerIP != "" {
-		err := fmt.Errorf("cannot specify both spec.LoadBalancerIP and networking.gke.io/ip-collection for LoadBalancer")
+		ipCollection := annotations.FromService(svc).GetIPCollection()
+		err := fmt.Errorf("cannot specify both spec.LoadBalancerIP (%q) and networking.gke.io/ip-collection (%q) for LoadBalancer", svc.Spec.LoadBalancerIP, ipCollection)
 		result.Error = l4utils.NewUserError(err)
 		result.MetricsLegacyState.IsUserError = true
 		result.MetricsState.Status = metrics.StatusUserError

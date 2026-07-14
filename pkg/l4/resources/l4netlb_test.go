@@ -2395,7 +2395,7 @@ func TestEnsureFrontendConflictingIPAnnotations(t *testing.T) {
 	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
 	if result.Error == nil {
 		t.Errorf("Expected an error for conflicting annotations, but got nil")
-	} else if !strings.Contains(result.Error.Error(), "cannot specify both spec.LoadBalancerIP and ip-collection") {
+	} else if !strings.Contains(result.Error.Error(), "cannot specify both spec.LoadBalancerIP (\"1.2.3.4\") and networking.gke.io/ip-collection (\"my-collection\") for LoadBalancer") {
 		t.Errorf("Expected conflict error, got %v", result.Error)
 	}
 	if result.MetricsState.Status != metrics.StatusUserError {
