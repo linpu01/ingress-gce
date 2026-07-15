@@ -112,6 +112,7 @@ const (
 	CustomForwardingRuleKey = "networking.gke.io/custom-forwarding-rule"
 
 	// IPCollectionV6AnnotationKey is the annotation key for BYOIP IPv6 IP collection.
+	// The value of this annotation must be a full resource URL.
 	IPCollectionV6AnnotationKey = "networking.gke.io/ip-collection-v6"
 )
 
