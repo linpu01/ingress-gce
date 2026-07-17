@@ -272,33 +272,30 @@ func (l4netlb *L4NetLB) EnsureFrontend(nodeNames []string, svc *corev1.Service, 
 	l4netlb.networkInfo = *networkInfo
 
 	// Check conflicts between custom subnet and ip-collection annotations.
-	if annotations.FromService(svc).GetIPCollectionV6() != "" && annotations.FromService(svc).GetExternalLoadBalancerAnnotationSubnet() != "" {
-		subnet := annotations.FromService(svc).GetExternalLoadBalancerAnnotationSubnet()
-		ipCollection := annotations.FromService(svc).GetIPCollectionV6()
-		err := fmt.Errorf("cannot specify both networking.gke.io/load-balancer-subnet (%q) and networking.gke.io/ip-collection-v6 (%q) for LoadBalancer", subnet, ipCollection)
-		result.Error = l4utils.NewUserError(err)
-		result.MetricsLegacyState.IsUserError = true
-		result.MetricsState.Status = metrics.StatusUserError
-		return result
+	ipCollectionV6 := annotations.FromService(svc).GetIPCollectionV6()
+	subnet := annotations.FromService(svc).GetExternalLoadBalancerAnnotationSubnet()
+	if ipCollectionV6 != "" && subnet != "" {
+		err := fmt.Errorf("cannot specify both %s (%q) and %s (%q) for LoadBalancer", annotations.CustomSubnetAnnotationKey, subnet, annotations.IPCollectionV6AnnotationKey, ipCollectionV6)
+		l4netlb.recorder.Event(l4netlb.Service, corev1.EventTypeWarning, "IPCollectionV6Error", err.Error())
 	}
 
 	// Check conflicts between spec.loadBalancerIP and ip-collection
-	if annotations.FromService(svc).GetIPCollectionV6() != "" && svc.Spec.LoadBalancerIP != "" {
-		ipCollection := annotations.FromService(svc).GetIPCollectionV6()
-		err := fmt.Errorf("cannot specify both spec.LoadBalancerIP (%q) and networking.gke.io/ip-collection-v6 (%q) for LoadBalancer", svc.Spec.LoadBalancerIP, ipCollection)
-		result.Error = l4utils.NewUserError(err)
-		result.MetricsLegacyState.IsUserError = true
-		result.MetricsState.Status = metrics.StatusUserError
-		return result
+	if ipCollectionV6 != "" && svc.Spec.LoadBalancerIP != "" {
+		err := fmt.Errorf("cannot specify both spec.LoadBalancerIP (%q) and %s (%q) for LoadBalancer", svc.Spec.LoadBalancerIP, annotations.IPCollectionV6AnnotationKey, ipCollectionV6)
+		l4netlb.recorder.Event(l4netlb.Service, corev1.EventTypeWarning, "IPCollectionV6Error", err.Error())
+	}
+
+	// Check conflicts between load-balancer-ip-addresses and ip-collection
+	staticL4Addresses, _ := svc.Annotations[annotations.StaticL4AddressesAnnotationKey]
+	if ipCollectionV6 != "" && staticL4Addresses != "" {
+		err := fmt.Errorf("cannot specify both %s (%q) and %s (%q) for LoadBalancer", annotations.StaticL4AddressesAnnotationKey, staticL4Addresses, annotations.IPCollectionV6AnnotationKey, ipCollectionV6)
+		l4netlb.recorder.Event(l4netlb.Service, corev1.EventTypeWarning, "IPCollectionV6Error", err.Error())
 	}
 
 	// Check if ip-collection-v6 is specified for an IPv4 service
-	if annotations.FromService(svc).GetIPCollectionV6() != "" && l4utils.NeedsIPv4(svc) {
-		err := fmt.Errorf("networking.gke.io/ip-collection-v6 is currently only supported for IPv6-only Services")
-		result.Error = l4utils.NewUserError(err)
-		result.MetricsLegacyState.IsUserError = true
-		result.MetricsState.Status = metrics.StatusUserError
-		return result
+	if ipCollectionV6 != "" && l4utils.NeedsIPv4(svc) {
+		err := fmt.Errorf("%s is currently only supported for IPv6-only Services", annotations.IPCollectionV6AnnotationKey)
+		l4netlb.recorder.Event(l4netlb.Service, corev1.EventTypeWarning, "IPCollectionV6Error", err.Error())
 	}
 
 	// if service requires strong session affinity, check requirements

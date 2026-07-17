@@ -2312,13 +2312,21 @@ func TestEnsureFrontendConflictingAnnotations(t *testing.T) {
 	}
 
 	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
-	if result.Error == nil {
-		t.Errorf("Expected an error for conflicting annotations, but got nil")
-	} else if !strings.Contains(result.Error.Error(), "cannot specify both networking.gke.io/load-balancer-subnet (\"my-subnet\") and networking.gke.io/ip-collection-v6 (\"my-collection\") for LoadBalancer") {
-		t.Errorf("Expected conflict error, got %v", result.Error)
+	if result.Error != nil {
+		t.Errorf("Expected no error for conflicting annotations, but got %v", result.Error)
 	}
-	if result.MetricsState.Status != metrics.StatusUserError {
-		t.Errorf("Expected UserError status, got %v", result.MetricsState.Status)
+
+	fakeRecorder := l4netlb.recorder.(*record.FakeRecorder)
+	warningFound := false
+	for len(fakeRecorder.Events) > 0 {
+		event := <-fakeRecorder.Events
+		if strings.Contains(event, "Warning IPCollectionV6Error") {
+			warningFound = true
+			break
+		}
+	}
+	if !warningFound {
+		t.Errorf("Expected IPCollectionV6Error warning event, but got none")
 	}
 }
 
@@ -2352,13 +2360,69 @@ func TestEnsureFrontendConflictingIPAnnotations(t *testing.T) {
 	}
 
 	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
-	if result.Error == nil {
-		t.Errorf("Expected an error for conflicting annotations, but got nil")
-	} else if !strings.Contains(result.Error.Error(), "cannot specify both spec.LoadBalancerIP (\"1.2.3.4\") and networking.gke.io/ip-collection-v6 (\"my-collection\") for LoadBalancer") {
-		t.Errorf("Expected conflict error, got %v", result.Error)
+	if result.Error != nil {
+		t.Errorf("Expected no error for conflicting annotations, but got %v", result.Error)
 	}
-	if result.MetricsState.Status != metrics.StatusUserError {
-		t.Errorf("Expected UserError status, got %v", result.MetricsState.Status)
+
+	fakeRecorder := l4netlb.recorder.(*record.FakeRecorder)
+	warningFound := false
+	for len(fakeRecorder.Events) > 0 {
+		event := <-fakeRecorder.Events
+		if strings.Contains(event, "Warning IPCollectionV6Error") {
+			warningFound = true
+			break
+		}
+	}
+	if !warningFound {
+		t.Errorf("Expected IPCollectionV6Error warning event, but got none")
+	}
+}
+
+func TestEnsureFrontendConflictingIPAddressesAnnotation(t *testing.T) {
+	t.Parallel()
+	nodeNames := []string{"test-node-1"}
+	vals := gce.DefaultTestClusterValues()
+	fakeGCE := getFakeGCECloud(vals)
+
+	svc := test.NewL4NetLBRBSService(8080)
+	if svc.Annotations == nil {
+		svc.Annotations = make(map[string]string)
+	}
+	svc.Annotations[annotations.IPCollectionV6AnnotationKey] = "my-collection"
+	svc.Annotations[annotations.StaticL4AddressesAnnotationKey] = "1.2.3.4"
+
+	namer := namer_util.NewL4Namer(kubeSystemUID, namer_util.NewNamer(vals.ClusterName, "cluster-fw", klog.TODO()))
+
+	l4NetLBParams := &L4NetLBParams{
+		Service:         svc,
+		Cloud:           fakeGCE,
+		Namer:           namer,
+		Recorder:        record.NewFakeRecorder(100),
+		NetworkResolver: network.NewFakeResolver(network.DefaultNetwork(fakeGCE)),
+	}
+	l4netlb := NewL4NetLB(l4NetLBParams, klog.TODO())
+	l4netlb.healthChecks = healthchecks.Fake(fakeGCE, l4netlb.recorder)
+
+	if _, err := test.CreateAndInsertNodes(l4netlb.cloud, nodeNames, vals.ZoneName); err != nil {
+		t.Errorf("Unexpected error when adding nodes %v", err)
+	}
+
+	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
+	if result.Error != nil {
+		t.Errorf("Expected no error for conflicting annotations, but got %v", result.Error)
+	}
+
+	fakeRecorder := l4netlb.recorder.(*record.FakeRecorder)
+	warningFound := false
+	for len(fakeRecorder.Events) > 0 {
+		event := <-fakeRecorder.Events
+		if strings.Contains(event, "Warning IPCollectionV6Error") {
+			warningFound = true
+			break
+		}
+	}
+	if !warningFound {
+		t.Errorf("Expected IPCollectionV6Error warning event, but got none")
 	}
 }
 
@@ -2390,16 +2454,21 @@ func TestEnsureFrontendIPv4OnlyIPCollectionError(t *testing.T) {
 	}
 
 	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
-	if result.Error == nil {
-		t.Errorf("Expected an error for ip-collection on IPv4 service, but got nil")
-	} else if !strings.Contains(result.Error.Error(), "networking.gke.io/ip-collection-v6 is currently only supported for IPv6-only Services") {
-		t.Errorf("Expected IPv6-only error, got %v", result.Error)
+	if result.Error != nil {
+		t.Errorf("Expected no error for ip-collection on IPv4 service, but got %v", result.Error)
 	}
-	if result.MetricsState.Status != metrics.StatusUserError {
-		t.Errorf("Expected StatusUserError, got %v", result.MetricsState.Status)
+
+	fakeRecorder := l4netlb.recorder.(*record.FakeRecorder)
+	warningFound := false
+	for len(fakeRecorder.Events) > 0 {
+		event := <-fakeRecorder.Events
+		if strings.Contains(event, "Warning IPCollectionV6Error") {
+			warningFound = true
+			break
+		}
 	}
-	if result.MetricsLegacyState.IsUserError != true {
-		t.Errorf("Expected IsUserError to be true")
+	if !warningFound {
+		t.Errorf("Expected IPCollectionV6Error warning event, but got none")
 	}
 }
 
@@ -2431,15 +2500,20 @@ func TestEnsureFrontendDualStackIPCollectionError(t *testing.T) {
 	}
 
 	result := l4netlb.EnsureFrontend(nodeNames, svc, time.Now())
-	if result.Error == nil {
-		t.Errorf("Expected an error for ip-collection on dualstack service, but got nil")
-	} else if !strings.Contains(result.Error.Error(), "networking.gke.io/ip-collection-v6 is currently only supported for IPv6-only Services") {
-		t.Errorf("Expected IPv6-only error, got %v", result.Error)
+	if result.Error != nil {
+		t.Errorf("Expected no error for ip-collection on dualstack service, but got %v", result.Error)
 	}
-	if result.MetricsState.Status != metrics.StatusUserError {
-		t.Errorf("Expected StatusUserError, got %v", result.MetricsState.Status)
+
+	fakeRecorder := l4netlb.recorder.(*record.FakeRecorder)
+	warningFound := false
+	for len(fakeRecorder.Events) > 0 {
+		event := <-fakeRecorder.Events
+		if strings.Contains(event, "Warning IPCollectionV6Error") {
+			warningFound = true
+			break
+		}
 	}
-	if result.MetricsLegacyState.IsUserError != true {
-		t.Errorf("Expected IsUserError to be true")
+	if !warningFound {
+		t.Errorf("Expected IPCollectionV6Error warning event, but got none")
 	}
 }

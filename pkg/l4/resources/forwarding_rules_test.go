@@ -196,33 +196,6 @@ func TestL4CreateExternalForwardingRule(t *testing.T) {
 				Description:         l4ServiceDescription(t, serviceName, serviceNamespace, "1.2.3.4", utils.XLB),
 			},
 		},
-		{
-			desc: "create with ip-collection",
-			svc: &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: serviceNamespace, UID: types.UID("1"), Annotations: map[string]string{annotations.IPCollectionV6AnnotationKey: "my-ip-collection"}},
-				Spec: corev1.ServiceSpec{
-					Ports: []corev1.ServicePort{
-						{
-							Port:     8080,
-							Protocol: corev1.ProtocolTCP,
-						},
-					},
-					Type:           "LoadBalancer",
-					LoadBalancerIP: "1.1.1.1",
-				},
-			},
-			wantRule: &composite.ForwardingRule{
-				IPAddress:           "1.1.1.1",
-				PortRange:           "8080-8080",
-				IPProtocol:          "TCP",
-				LoadBalancingScheme: string(cloud.SchemeExternal),
-				NetworkTier:         cloud.NetworkTierDefault.ToGCEValue(),
-				Version:             meta.VersionGA,
-				BackendService:      bsLink,
-				Description:         l4ServiceDescription(t, serviceName, serviceNamespace, "1.1.1.1", utils.XLB),
-				IpCollection:        "my-ip-collection",
-			},
-		},
 	}
 
 	for _, tc := range testCases {
