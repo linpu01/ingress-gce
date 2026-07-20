@@ -17,13 +17,18 @@ limitations under the License.
 package controllers
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
+	"google.golang.org/api/googleapi"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -34,6 +39,7 @@ import (
 	ingctx "k8s.io/ingress-gce/pkg/context"
 	"k8s.io/ingress-gce/pkg/l4/annotations"
 	l4metrics "k8s.io/ingress-gce/pkg/l4/metrics"
+	l4utils "k8s.io/ingress-gce/pkg/l4/utils"
 	"k8s.io/ingress-gce/pkg/test"
 	"k8s.io/ingress-gce/pkg/utils/namer"
 	"k8s.io/klog/v2"
@@ -47,6 +53,7 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 	region := "us-central1"
 
 	bsURL := fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/regions/%s/backendServices/bs1", project, region)
+	globalBsURL := fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/global/backendServices/bs1", project)
 
 	testCases := []struct {
 		desc               string
@@ -55,6 +62,7 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 		expectIPs          []string
 		expectEventReasons []string
 		expectError        bool
+		expectCondition    *metav1.Condition
 	}{
 		{
 			desc: "Multiple forwarding rules, one missing, success",
@@ -79,12 +87,18 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "TCP",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 			},
 			expectIPs:          []string{frIP},
 			expectError:        true,
 			expectEventReasons: []string{"ForwardingRuleUnusable"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionTrue,
+				Reason:  "IPProgrammed",
+				Message: "IPs programmed: 10.0.0.100",
+			},
 		},
 		{
 			desc: "Multiple forwarding rules, all missing, error",
@@ -104,6 +118,12 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 			frs:         map[string]*composite.ForwardingRule{},
 			expectIPs:   nil,
 			expectError: true,
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "InvalidForwardingRule",
+				Message: "The custom forwarding rule reference is invalid",
+			},
 		},
 		{
 			desc: "Multiple forwarding rules, multiple backend services, success",
@@ -128,7 +148,7 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "TCP",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 				"fr2": {
 					Name:                "fr2",
@@ -137,11 +157,96 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "TCP",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 			},
 			expectIPs:   []string{frIP, "10.0.0.101"},
 			expectError: false,
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionTrue,
+				Reason:  "IPProgrammed",
+				Message: "IPs programmed: 10.0.0.100, 10.0.0.101",
+			},
+		},
+		{
+			desc: "Single forwarding rule with multiple IPs, success",
+			svc: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "svc-multi-ip",
+					Namespace: "default",
+					Annotations: map[string]string{
+						annotations.CustomForwardingRuleKey: "global/forwardingRules/" + frName,
+					},
+				},
+				Spec: v1.ServiceSpec{
+					Type:              v1.ServiceTypeLoadBalancer,
+					LoadBalancerClass: &lbClass,
+				},
+			},
+			frs: map[string]*composite.ForwardingRule{
+				frName: {
+					Name:                "global/forwardingRules/" + frName,
+					IPAddresses:         []string{"10.0.0.100", "10.0.0.101"},
+					BackendService:      globalBsURL,
+					LoadBalancingScheme: "EXTERNAL_PASSTHROUGH",
+					IPProtocol:          "TCP",
+					Scope:               meta.Global,
+					Version:             meta.VersionBeta,
+				},
+			},
+			expectIPs:   []string{"10.0.0.100", "10.0.0.101"},
+			expectError: false,
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionTrue,
+				Reason:  "IPProgrammed",
+				Message: "IPs programmed: 10.0.0.100, 10.0.0.101",
+			},
+		},
+		{
+			desc: "Multiple forwarding rules with multiple IPs aggregated, success",
+			svc: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "svc-multi-fr-multi-ip",
+					Namespace: "default",
+					Annotations: map[string]string{
+						annotations.CustomForwardingRuleKey: "global/forwardingRules/" + frName + ",global/forwardingRules/fr2",
+					},
+				},
+				Spec: v1.ServiceSpec{
+					Type:              v1.ServiceTypeLoadBalancer,
+					LoadBalancerClass: &lbClass,
+				},
+			},
+			frs: map[string]*composite.ForwardingRule{
+				frName: {
+					Name:                "global/forwardingRules/" + frName,
+					IPAddresses:         []string{"10.0.0.100", "10.0.0.101"},
+					BackendService:      globalBsURL,
+					LoadBalancingScheme: "EXTERNAL_PASSTHROUGH",
+					IPProtocol:          "TCP",
+					Scope:               meta.Global,
+					Version:             meta.VersionBeta,
+				},
+				"fr2": {
+					Name:                "global/forwardingRules/fr2",
+					IPAddresses:         []string{"10.0.0.102", "10.0.0.103"},
+					BackendService:      globalBsURL,
+					LoadBalancingScheme: "EXTERNAL_PASSTHROUGH",
+					IPProtocol:          "TCP",
+					Scope:               meta.Global,
+					Version:             meta.VersionBeta,
+				},
+			},
+			expectIPs:   []string{"10.0.0.100", "10.0.0.101", "10.0.0.102", "10.0.0.103"},
+			expectError: false,
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionTrue,
+				Reason:  "IPProgrammed",
+				Message: "IPs programmed: 10.0.0.100, 10.0.0.101, 10.0.0.102, 10.0.0.103",
+			},
 		},
 		{
 			desc: "Multiple forwarding rules, same backend service, success",
@@ -166,7 +271,7 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "TCP",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 				"fr2": {
 					Name:                "fr2",
@@ -175,11 +280,17 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "TCP",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 			},
 			expectIPs:   []string{frIP, "10.0.0.101"},
 			expectError: false,
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionTrue,
+				Reason:  "IPProgrammed",
+				Message: "IPs programmed: 10.0.0.100, 10.0.0.101",
+			},
 		},
 		{
 			desc: "Global forwarding rule sync success",
@@ -204,10 +315,16 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "TCP",
 					Scope:               meta.Global,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 			},
 			expectIPs: []string{"10.0.0.200"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionTrue,
+				Reason:  "IPProgrammed",
+				Message: "IPs programmed: 10.0.0.200",
+			},
 		},
 		{
 			desc: "Failure when rule has INTERNAL scheme",
@@ -232,12 +349,18 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "INTERNAL",
 					IPProtocol:          "TCP",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 			},
 			expectIPs:          nil,
 			expectError:        true,
 			expectEventReasons: []string{"ForwardingRuleUnusable"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "UnsupportedLBType",
+				Message: "The referenced forwarding rule has an unsupported load balancing scheme",
+			},
 		},
 		{
 			desc: "Failure when rule protocol is ESP",
@@ -262,12 +385,18 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "ESP",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 			},
 			expectIPs:          nil,
 			expectError:        true,
 			expectEventReasons: []string{"ForwardingRuleUnusable"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "InvalidForwardingRule",
+				Message: "The custom forwarding rule reference is invalid",
+			},
 		},
 		{
 			desc: "Success when rule protocol is L3_DEFAULT",
@@ -292,10 +421,16 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "L3_DEFAULT",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 			},
 			expectIPs: []string{frIP},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionTrue,
+				Reason:  "IPProgrammed",
+				Message: "IPs programmed: 10.0.0.100",
+			},
 		},
 		{
 			desc: "Missing forwarding rule annotation entirely",
@@ -311,6 +446,12 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 			},
 			expectError:        true,
 			expectEventReasons: []string{"NoForwardingRuleRef"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "NoForwardingRuleRef",
+				Message: "Service is missing the custom forwarding rule reference",
+			},
 		},
 		{
 			desc: "Forwarding rule annotation is empty",
@@ -329,6 +470,12 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 			},
 			expectError:        true,
 			expectEventReasons: []string{"NoForwardingRuleRef"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "NoForwardingRuleRef",
+				Message: "Service is missing the custom forwarding rule reference",
+			},
 		},
 		{
 			desc: "Forwarding rule annotation parses to nothing",
@@ -347,6 +494,12 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 			},
 			expectError:        true,
 			expectEventReasons: []string{"NoForwardingRuleRef"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "NoForwardingRuleRef",
+				Message: "Service is missing the custom forwarding rule reference",
+			},
 		},
 		{
 			desc: "Forwarding rule annotation has invalid URL",
@@ -365,6 +518,12 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 			},
 			expectError:        true,
 			expectEventReasons: []string{"ForwardingRuleUnusable"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "InvalidForwardingRule",
+				Message: "The custom forwarding rule reference is invalid",
+			},
 		},
 		{
 			desc: "Clear status ingress IP when Service type is not LoadBalancer",
@@ -386,6 +545,13 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 							{IP: "1.2.3.4"},
 						},
 					},
+					Conditions: []metav1.Condition{
+						{
+							Type:   "ExternalIPProgrammed",
+							Status: metav1.ConditionTrue,
+							Reason: "IPProgrammed",
+						},
+					},
 				},
 			},
 			frs: map[string]*composite.ForwardingRule{
@@ -396,10 +562,11 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "TCP",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 			},
-			expectError: false,
+			expectError:     false,
+			expectCondition: nil,
 		},
 		{
 			desc: "Clear status ingress IP when CustomForwardingRuleKey annotation is missing",
@@ -418,11 +585,24 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 							{IP: "1.2.3.4"},
 						},
 					},
+					Conditions: []metav1.Condition{
+						{
+							Type:   "ExternalIPProgrammed",
+							Status: metav1.ConditionTrue,
+							Reason: "IPProgrammed",
+						},
+					},
 				},
 			},
 			expectIPs:          nil,
 			expectError:        true,
 			expectEventReasons: []string{"NoForwardingRuleRef"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "NoForwardingRuleRef",
+				Message: "Service is missing the custom forwarding rule reference",
+			},
 		},
 		{
 			desc: "Clear status ingress IP when forwarding rule protocol is ESP (unusable)",
@@ -444,6 +624,13 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 							{IP: "1.2.3.4"},
 						},
 					},
+					Conditions: []metav1.Condition{
+						{
+							Type:   "ExternalIPProgrammed",
+							Status: metav1.ConditionTrue,
+							Reason: "IPProgrammed",
+						},
+					},
 				},
 			},
 			frs: map[string]*composite.ForwardingRule{
@@ -454,12 +641,18 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					LoadBalancingScheme: "EXTERNAL",
 					IPProtocol:          "ESP",
 					Scope:               meta.Regional,
-					Version:             meta.VersionGA,
+					Version:             meta.VersionBeta,
 				},
 			},
 			expectIPs:          nil,
 			expectError:        true,
 			expectEventReasons: []string{"ForwardingRuleUnusable"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "InvalidForwardingRule",
+				Message: "The custom forwarding rule reference is invalid",
+			},
 		},
 		{
 			desc: "Clear status ingress IP when CustomForwardingRuleKey annotation parses to nothing",
@@ -481,11 +674,24 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 							{IP: "1.2.3.4"},
 						},
 					},
+					Conditions: []metav1.Condition{
+						{
+							Type:   "ExternalIPProgrammed",
+							Status: metav1.ConditionTrue,
+							Reason: "IPProgrammed",
+						},
+					},
 				},
 			},
 			expectIPs:          nil,
 			expectError:        true,
 			expectEventReasons: []string{"NoForwardingRuleRef"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "NoForwardingRuleRef",
+				Message: "Service is missing the custom forwarding rule reference",
+			},
 		},
 		{
 			desc: "Clear status ingress IP when CustomForwardingRuleKey annotation has an invalid URL",
@@ -507,11 +713,159 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 							{IP: "1.2.3.4"},
 						},
 					},
+					Conditions: []metav1.Condition{
+						{
+							Type:   "ExternalIPProgrammed",
+							Status: metav1.ConditionTrue,
+							Reason: "IPProgrammed",
+						},
+					},
 				},
 			},
 			expectIPs:          nil,
 			expectError:        true,
 			expectEventReasons: []string{"ForwardingRuleUnusable"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionFalse,
+				Reason:  "InvalidForwardingRule",
+				Message: "The custom forwarding rule reference is invalid",
+			},
+		},
+		{
+			desc: "Too many forwarding rules, skip remaining",
+			svc: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "svc3",
+					Namespace: "default",
+					Annotations: map[string]string{
+						annotations.CustomForwardingRuleKey: generateForwardingRuleKey("custom-fr-", 12),
+					},
+				},
+				Spec: v1.ServiceSpec{
+					Type:              v1.ServiceTypeLoadBalancer,
+					LoadBalancerClass: &lbClass,
+				},
+			},
+			frs: map[string]*composite.ForwardingRule{
+				"custom-fr-1": {
+					Name:                "custom-fr-1",
+					IPAddress:           "10.0.0.100",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-2": {
+					Name:                "custom-fr-2",
+					IPAddress:           "10.0.0.101",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-3": {
+					Name:                "custom-fr-3",
+					IPAddress:           "10.0.0.102",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-4": {
+					Name:                "custom-fr-4",
+					IPAddress:           "10.0.0.103",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-5": {
+					Name:                "custom-fr-5",
+					IPAddress:           "10.0.0.104",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-6": {
+					Name:                "custom-fr-6",
+					IPAddress:           "10.0.0.105",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-7": {
+					Name:                "custom-fr-7",
+					IPAddress:           "10.0.0.106",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-8": {
+					Name:                "custom-fr-8",
+					IPAddress:           "10.0.0.107",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-9": {
+					Name:                "custom-fr-9",
+					IPAddress:           "10.0.0.108",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-10": {
+					Name:                "custom-fr-10",
+					IPAddress:           "10.0.0.109",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-11": {
+					Name:                "custom-fr-11",
+					IPAddress:           "10.0.0.110",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+				"custom-fr-12": {
+					Name:                "custom-fr-12",
+					IPAddress:           "10.0.0.111",
+					BackendService:      bsURL,
+					LoadBalancingScheme: "EXTERNAL",
+					IPProtocol:          "TCP",
+					Scope:               meta.Regional,
+					Version:             meta.VersionBeta,
+				},
+			},
+			expectError: false,
+			// Note the alphabetical order.
+			expectIPs: []string{"10.0.0.100", "10.0.0.109", "10.0.0.110", "10.0.0.111", "10.0.0.101", "10.0.0.102", "10.0.0.103", "10.0.0.104", "10.0.0.105", "10.0.0.106"},
+			expectCondition: &metav1.Condition{
+				Type:    "ExternalIPProgrammed",
+				Status:  metav1.ConditionTrue,
+				Reason:  "IPProgrammed",
+				Message: "IPs programmed: 10.0.0.100, 10.0.0.109, 10.0.0.110, 10.0.0.111, 10.0.0.101, 10.0.0.102, 10.0.0.103, 10.0.0.104, 10.0.0.105, 10.0.0.106",
+			},
 		},
 	}
 
@@ -550,7 +904,7 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 			kubeClient.CoreV1().Services(tc.svc.Namespace).Create(context.TODO(), tc.svc, metav1.CreateOptions{})
 
 			key := tc.svc.Namespace + "/" + tc.svc.Name
-			err = lc.sync(key)
+			err = lc.syncWrapper(key)
 			if (err != nil) != tc.expectError {
 				t.Errorf("sync() error = %v, expectError %v", err, tc.expectError)
 			}
@@ -588,6 +942,37 @@ func TestStandaloneNEGLBSync(t *testing.T) {
 					}
 				}
 			}
+
+			// Assert conditions
+			if tc.expectCondition != nil {
+				var found *metav1.Condition
+				for i := range updatedSvc.Status.Conditions {
+					if updatedSvc.Status.Conditions[i].Type == tc.expectCondition.Type {
+						found = &updatedSvc.Status.Conditions[i]
+						break
+					}
+				}
+				if found == nil {
+					t.Errorf("Expected condition %s not found", tc.expectCondition.Type)
+				} else {
+					if found.Status != tc.expectCondition.Status {
+						t.Errorf("Expected condition status %v, got %v", tc.expectCondition.Status, found.Status)
+					}
+					if found.Reason != tc.expectCondition.Reason {
+						t.Errorf("Expected condition reason %s, got %s", tc.expectCondition.Reason, found.Reason)
+					}
+					if found.Message != tc.expectCondition.Message {
+						t.Errorf("Expected condition message %q, got %q", tc.expectCondition.Message, found.Message)
+					}
+				}
+			} else {
+				// Expect no ExternalIPProgrammed condition
+				for _, c := range updatedSvc.Status.Conditions {
+					if c.Type == "ExternalIPProgrammed" {
+						t.Errorf("Expected no ExternalIPProgrammed condition, but found one: %+v", c)
+					}
+				}
+			}
 		})
 	}
 }
@@ -616,6 +1001,26 @@ func TestValidateForwardingRule(t *testing.T) {
 				IPProtocol:          "UDP",
 			},
 			frName:      "valid-udp",
+			expectError: false,
+		},
+		{
+			desc: "Valid two IPv4 addresses",
+			fr: &composite.ForwardingRule{
+				LoadBalancingScheme: "EXTERNAL_PASSTHROUGH",
+				IPProtocol:          "TCP",
+				IPAddresses:         []string{"10.0.0.100", "10.0.1.101"},
+			},
+			frName:      "valid-two-ipv4",
+			expectError: false,
+		},
+		{
+			desc: "Valid two IPv6 addresses",
+			fr: &composite.ForwardingRule{
+				LoadBalancingScheme: "EXTERNAL_PASSTHROUGH",
+				IPProtocol:          "TCP",
+				IPAddresses:         []string{"2600:1234::1234/96", "2600:1235::123/96"},
+			},
+			frName:      "valid-two-ipv6",
 			expectError: false,
 		},
 		{
@@ -665,6 +1070,17 @@ func TestValidateForwardingRule(t *testing.T) {
 			frName:         "invalid-protocol",
 			expectError:    true,
 			expectErrorMsg: "forwarding rule invalid-protocol has unsupported protocol: ESP, supported protocols are: TCP, UDP, L3_DEFAULT",
+		},
+		{
+			desc: "More than two IP addresses in IPAddresses array",
+			fr: &composite.ForwardingRule{
+				LoadBalancingScheme: "EXTERNAL_PASSTHROUGH",
+				IPProtocol:          "TCP",
+				IPAddresses:         []string{"10.0.0.100", "10.0.0.101", "10.0.0.102"},
+			},
+			frName:         "too-many-ips",
+			expectError:    true,
+			expectErrorMsg: "forwarding rule too-many-ips has more than 2 IP addresses",
 		},
 	}
 
@@ -721,7 +1137,7 @@ func TestStandaloneNEGLBControllerMetrics_Success(t *testing.T) {
 		LoadBalancingScheme: "EXTERNAL",
 		IPProtocol:          "TCP",
 		Scope:               meta.Regional,
-		Version:             meta.VersionGA,
+		Version:             meta.VersionBeta,
 	}
 	err = composite.CreateForwardingRule(fakeGCE, key, fr, klog.TODO())
 	if err != nil {
@@ -748,7 +1164,7 @@ func TestStandaloneNEGLBControllerMetrics_Success(t *testing.T) {
 
 	svcKey := svc.Namespace + "/" + svc.Name
 
-	err = lc.sync(svcKey)
+	err = lc.syncWrapper(svcKey)
 	if err != nil {
 		t.Fatalf("sync() error = %v", err)
 	}
@@ -788,7 +1204,7 @@ func TestStandaloneNEGLBControllerMetrics_UserError(t *testing.T) {
 		LoadBalancingScheme: "INTERNAL_SELF_MANAGED", // Invalid
 		IPProtocol:          "TCP",
 		Scope:               meta.Regional,
-		Version:             meta.VersionGA,
+		Version:             meta.VersionBeta,
 	}
 	err = composite.CreateForwardingRule(fakeGCE, key, fr, klog.TODO())
 	if err != nil {
@@ -814,7 +1230,7 @@ func TestStandaloneNEGLBControllerMetrics_UserError(t *testing.T) {
 
 	svcKey := svc.Namespace + "/" + svc.Name
 
-	err = lc.sync(svcKey)
+	err = lc.syncWrapper(svcKey)
 	if err == nil {
 		t.Fatalf("Expected sync to fail")
 	}
@@ -843,11 +1259,11 @@ func TestStandaloneNEGLBControllerMetrics_SystemError(t *testing.T) {
 
 	// Inject GCE error
 	mockGCE := fakeGCE.Compute().(*cloud.MockGCE)
-	if mockGCE.MockForwardingRules.GetError == nil {
-		mockGCE.MockForwardingRules.GetError = make(map[meta.Key]error)
+	if mockGCE.MockBetaForwardingRules.GetError == nil {
+		mockGCE.MockBetaForwardingRules.GetError = make(map[meta.Key]error)
 	}
-	mockGCE.MockForwardingRules.GetError[*key] = fmt.Errorf("internal GCE error")
-	defer delete(mockGCE.MockForwardingRules.GetError, *key)
+	mockGCE.MockBetaForwardingRules.GetError[*key] = fmt.Errorf("internal GCE error")
+	defer delete(mockGCE.MockBetaForwardingRules.GetError, *key)
 
 	svc := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -868,7 +1284,7 @@ func TestStandaloneNEGLBControllerMetrics_SystemError(t *testing.T) {
 
 	svcKey := svc.Namespace + "/" + svc.Name
 
-	err = lc.sync(svcKey)
+	err = lc.syncWrapper(svcKey)
 	if err == nil {
 		t.Fatalf("Expected sync to fail due to GCE error")
 	}
@@ -908,7 +1324,7 @@ func TestStandaloneNEGLBControllerMetrics_Deletion(t *testing.T) {
 		LoadBalancingScheme: "EXTERNAL",
 		IPProtocol:          "TCP",
 		Scope:               meta.Regional,
-		Version:             meta.VersionGA,
+		Version:             meta.VersionBeta,
 	}
 	err = composite.CreateForwardingRule(fakeGCE, key, fr, klog.TODO())
 	if err != nil {
@@ -936,7 +1352,7 @@ func TestStandaloneNEGLBControllerMetrics_Deletion(t *testing.T) {
 	svcKey := svc.Namespace + "/" + svc.Name
 
 	// Initial sync to establish state in metrics
-	err = lc.sync(svcKey)
+	err = lc.syncWrapper(svcKey)
 	if err != nil {
 		t.Fatalf("sync() error = %v", err)
 	}
@@ -952,7 +1368,7 @@ func TestStandaloneNEGLBControllerMetrics_Deletion(t *testing.T) {
 	}
 	lc.ctx.ServiceInformer.GetIndexer().Delete(svc)
 
-	err = lc.sync(svcKey)
+	err = lc.syncWrapper(svcKey)
 	if err != nil {
 		t.Fatalf("sync() error = %v", err)
 	}
@@ -1125,4 +1541,75 @@ func TestStandaloneNEGLBControllerEventHandlers_Delete(t *testing.T) {
 	if err != nil {
 		t.Errorf("Failed to verify DeleteFunc via metrics: %v", err)
 	}
+}
+
+func TestClassifyError(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		err      error
+		expected lbConditionReason
+	}{
+		{
+			desc:     "nil error",
+			err:      nil,
+			expected: ProviderError,
+		},
+		{
+			desc:     "not found error",
+			err:      &googleapi.Error{Code: http.StatusNotFound},
+			expected: InvalidForwardingRule,
+		},
+		{
+			desc:     "unsupported load balancing scheme",
+			err:      l4utils.NewUnsupportedLoadBalancingSchemeError("fr-name", "EXTERNAL", []string{"INTERNAL"}),
+			expected: UnsupportedLBType,
+		},
+		{
+			desc:     "unsupported load balancing scheme wrapped in UserError",
+			err:      l4utils.NewUserError(l4utils.NewUnsupportedLoadBalancingSchemeError("fr-name", "EXTERNAL", []string{"INTERNAL"})),
+			expected: UnsupportedLBType,
+		},
+		{
+			desc:     "unsupported load balancing scheme wrapped in UserError and fmt.Errorf",
+			err:      fmt.Errorf("wrapped: %w", l4utils.NewUserError(l4utils.NewUnsupportedLoadBalancingSchemeError("fr-name", "EXTERNAL", []string{"INTERNAL"}))),
+			expected: UnsupportedLBType,
+		},
+		{
+			desc:     "unsupported protocol",
+			err:      l4utils.NewUnsupportedProtocolError("fr-name", "UAUDP", []string{"TCP"}),
+			expected: InvalidForwardingRule,
+		},
+		{
+			desc:     "unsupported protocol wrapped in UserError",
+			err:      l4utils.NewUserError(l4utils.NewUnsupportedProtocolError("fr-name", "UAUDP", []string{"TCP"})),
+			expected: InvalidForwardingRule,
+		},
+		{
+			desc:     "unsupported protocol wrapped in UserError and fmt.Errorf",
+			err:      fmt.Errorf("wrapped: %w", l4utils.NewUserError(l4utils.NewUnsupportedProtocolError("fr-name", "UAUDP", []string{"TCP"}))),
+			expected: InvalidForwardingRule,
+		},
+		{
+			desc:     "generic error",
+			err:      errors.New("generic error"),
+			expected: ProviderError,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			got := classifyError(tc.err)
+			if got != tc.expected {
+				t.Errorf("classifyError(%v) = %q, expected %q", tc.err, got, tc.expected)
+			}
+		})
+	}
+}
+
+func generateForwardingRuleKey(fr string, num int) string {
+	var buffer bytes.Buffer
+	for i := 1; i <= num; i++ {
+		buffer.WriteString(fmt.Sprintf("%s%d,", fr, i))
+	}
+	return strings.TrimSuffix(buffer.String(), ",")
 }
