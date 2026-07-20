@@ -286,7 +286,7 @@ func (l4netlb *L4NetLB) EnsureFrontend(nodeNames []string, svc *corev1.Service, 
 	}
 
 	// Check conflicts between load-balancer-ip-addresses and ip-collection
-	staticL4Addresses, _ := svc.Annotations[annotations.StaticL4AddressesAnnotationKey]
+	staticL4Addresses := svc.Annotations[annotations.StaticL4AddressesAnnotationKey]
 	if ipCollectionV6 != "" && staticL4Addresses != "" {
 		err := fmt.Errorf("cannot specify both %s (%q) and %s (%q) for LoadBalancer", annotations.StaticL4AddressesAnnotationKey, staticL4Addresses, annotations.IPCollectionV6AnnotationKey, ipCollectionV6)
 		l4netlb.recorder.Event(l4netlb.Service, corev1.EventTypeWarning, "IPCollectionV6Error", err.Error())

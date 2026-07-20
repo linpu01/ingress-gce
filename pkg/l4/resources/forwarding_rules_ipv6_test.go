@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/ingress-gce/pkg/composite"
-	"k8s.io/ingress-gce/pkg/l4/annotations"
 	"k8s.io/ingress-gce/pkg/l4/forwardingrules"
 	"k8s.io/ingress-gce/pkg/network"
 	"k8s.io/ingress-gce/pkg/utils"
@@ -159,34 +158,6 @@ func TestL4EnsureIPv6ForwardingRuleUpdate(t *testing.T) {
 				Version:             meta.VersionGA,
 				BackendService:      bsLink,
 				Description:         ipV6ForwardingRuleDescription(t, serviceNamespace, serviceName),
-			},
-			wantUpdate: l4utils.ResourceUpdate,
-		},
-		{
-			desc: "create with ip-collection",
-			svc: &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: serviceNamespace, UID: types.UID("1"), Annotations: map[string]string{annotations.IPCollectionV6AnnotationKey: "my-ip-collection"}},
-				Spec: corev1.ServiceSpec{
-					Ports: []corev1.ServicePort{
-						{
-							Port:     8080,
-							Protocol: corev1.ProtocolTCP,
-						},
-					},
-					Type: "LoadBalancer",
-				},
-			},
-			existingRule: nil,
-			wantRule: &composite.ForwardingRule{
-				Ports:               []string{"8080"},
-				IPProtocol:          "TCP",
-				IpVersion:           IPVersionIPv6,
-				LoadBalancingScheme: string(cloud.SchemeInternal),
-				NetworkTier:         cloud.NetworkTierDefault.ToGCEValue(),
-				Version:             meta.VersionGA,
-				BackendService:      bsLink,
-				Description:         ipV6ForwardingRuleDescription(t, serviceNamespace, serviceName),
-				IpCollection:        "my-ip-collection",
 			},
 			wantUpdate: l4utils.ResourceUpdate,
 		},

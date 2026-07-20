@@ -99,10 +99,6 @@ func (l4 *L4) buildExpectedIPv6ForwardingRule(bsLink string, options gce.ILBOpti
 		}
 	}
 
-	if annotations.FromService(l4.Service).GetIPCollectionV6() != "" {
-		subnetworkURL = ""
-	}
-
 	svcPorts := l4.Service.Spec.Ports
 	ports := utils.GetPorts(svcPorts)
 	protocol := string(utils.GetProtocol(svcPorts))
@@ -133,7 +129,6 @@ func (l4 *L4) buildExpectedIPv6ForwardingRule(bsLink string, options gce.ILBOpti
 		Subnetwork:          subnetworkURL,
 		AllowGlobalAccess:   options.AllowGlobalAccess,
 		NetworkTier:         cloud.NetworkTierPremium.ToGCEValue(),
-		IpCollection:        annotations.FromService(l4.Service).GetIPCollectionV6(),
 	}
 
 	return fr, nil
